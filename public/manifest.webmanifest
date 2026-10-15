@@ -1,11 +1,10 @@
 {
-  "name": "Mathematic Bridge Race",
+  "name": "Mathematic Bridge Race Online",
   "short_name": "Bridge Race",
   "start_url": "./",
   "display": "fullscreen",
-  "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
-  "background_color": "#1d6fe8",
+  "background_color": "#5ec4ff",
   "theme_color": "#1d6fe8",
   "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
 }

@@ -1,15 +1,12 @@
 {
   "name": "mathematic-bridge-race-online",
   "version": "1.0.0",
-  "description": "Mathematic Bridge Race - multiplayer online (maks 10 pemain)",
-  "main": "server.js",
+  "private": true,
+  "description": "Mathematic Bridge Race: balapan jembatan hitung sampai 10 pemain, online untuk Vercel.",
   "scripts": {
-    "start": "node server.js"
+    "dev": "node dev-server.js",
+    "test": "node test/client-syntax.js && node test/api.test.js && node test/redis-rest.test.js",
+    "test:e2e": "python3 test/e2e.py"
   },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "ws": "^8.18.0"
-  }
+  "engines": { "node": ">=20" }
 }
