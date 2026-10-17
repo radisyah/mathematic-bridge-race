@@ -177,6 +177,38 @@
         flex: none;
         min-width: 12px;
       }
+      #sp {
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: calc(var(--sb) + 70px);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        padding: 5px 8px;
+        border-radius: 14px;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      #sp button {
+        font-size: 14px;
+        padding: 8px 12px;
+      }
+      #rk.spec .rr {
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      body.master #rs,
+      body.master #jz,
+      body.master #jb {
+        display: none !important;
+      }
+      #lms {
+        font-size: 14px;
+        font-weight: bold;
+        margin: 4px 0;
+      }
       #rs {
         right: 10px;
         bottom: calc(var(--sb) + 24px);
@@ -666,6 +698,11 @@
       </div>
       <div class="hud" id="rk"></div>
       <div class="hud" id="rs"><button data-a="restart">⟲ RESPAWN</button></div>
+      <div class="hud hide" id="sp">
+        <button data-a="specprev">◀</button><span id="spn">🎥</span
+        ><button data-a="specnext">▶</button
+        ><button data-a="specauto">AUTO</button>
+      </div>
       <div class="hud" id="tr">
         <button data-a="pause">☰</button
         ><button id="bM" data-a="mute">🔊</button
@@ -693,6 +730,9 @@
           /></label>
           <button class="b gr go" data-a="quick">⚡ MAIN CEPAT</button>
           <button class="b cy wide" data-a="create">➕ Buat Room Teman</button>
+          <button class="b wide" data-a="createmaster">
+            🎥 Buat Room sebagai Room Master
+          </button>
           <div class="row">
             <input
               id="cd"
@@ -702,6 +742,9 @@
               autocapitalize="characters"
             /><button class="b" data-a="joincode">Gabung</button>
           </div>
+          <button class="b wide" data-a="joinmaster">
+            🎥 Gabung sebagai Room Master (hanya menonton)
+          </button>
           <div id="msg"></div>
           <div class="kc">
             <span>⌨️ W A S D / ▲ ◀ ▼ ▶</span><span>📱 Joystick di layar</span>
@@ -712,7 +755,9 @@
               Main Cepat: masuk ke lobby umum. Buat Room: kamu dapat kode 4
               huruf / link untuk dibagikan ke teman. Lobby menampung maksimal 10
               pemain dan host bisa menekan MULAI kalau sudah ada minimal 2
-              pemain.<br />R / Enter respawn · P / Esc menu · M suara<br />Satu
+              pemain.<br />Room Master: 1 penonton tambahan per room (di luar
+              10 pemain) yang hanya melihat semua pemain bermain, bisa memilih
+              pemain yang diikuti kameranya, dan boleh menekan MULAI.<br />R / Enter respawn · P / Esc menu · M suara<br />Satu
               soal berlaku untuk seluruh jembatan. Maju kapan saja ke ubin
               berangka jawaban benar. Soal operasi campuran makin sulit: dari 2
               angka sampai maksimal 3 angka. Angka di soal kecil (1–5) dan
@@ -732,6 +777,7 @@
         <div class="card">
           <h2>🏁 Lobby</h2>
           <div class="lcode">Kode room<b id="lc">----</b></div>
+          <div id="lms"></div>
           <button class="b cy" data-a="copy">📋 Bagikan link</button>
           <div id="lp"></div>
           <div id="lm"></div>
@@ -807,6 +853,8 @@
           clouds = [],
           AC,
           ME = 0,
+          MASTER = false,
+          SPEC = { auto: true, id: 0 },
           ROOM = null;
         function mulberry(a) {
           return () => {
@@ -1182,6 +1230,38 @@
           K = {};
           netT = 0;
         }
+        function setMaster(v) {
+          MASTER = !!v;
+          SPEC = { auto: true, id: 0 };
+          document.body.classList.toggle("master", MASTER);
+          $("rk").classList.toggle("spec", MASTER);
+          $("sp").classList.toggle("hide", !MASTER);
+        }
+        /* Room Master hanya menonton: kamera mengikuti pemain terdepan (AUTO) atau pemain yang dipilih. */
+        function pickSpec() {
+          if (!PL || !PL.length) return;
+          let t = !SPEC.auto && PL.find((p) => p.id === SPEC.id);
+          if (!t) {
+            SPEC.auto = true;
+            t = PL.reduce((a, b) => (b.z > a.z ? b : a));
+          }
+          LP = t;
+        }
+        function specStep(d) {
+          if (!MASTER || !PL || !PL.length) return;
+          const i = Math.max(0, PL.indexOf(LP));
+          SPEC.auto = false;
+          SPEC.id = PL[(i + d + PL.length) % PL.length].id;
+          pickSpec();
+        }
+        function specTimer(dt) {
+          const g = G;
+          if (g.phase === "timer") {
+            const a = Math.ceil(g.timer);
+            g.timer = Math.max(0, g.timer - dt);
+            if (g.timer > 0 && Math.ceil(g.timer) < a && a <= 4) SFX.tick();
+          } else g.dropT += dt;
+        }
         function toMenu() {
           netStop();
           setMV(0.5);
@@ -1190,6 +1270,7 @@
           PL = null;
           LP = null;
           ROOM = null;
+          setMaster(false);
           ["hud", "res", "cnt", "lobby"].forEach((i) =>
             $(i).classList.add("hide")
           );
@@ -1521,6 +1602,7 @@
           });
           conf = conf.filter((p) => p.y < H + 30);
           if (!G) return;
+          if (MASTER) pickSpec();
           PL.forEach((p) => {
             p.sk = Math.max(0, p.sk - dt);
           });
@@ -1544,13 +1626,16 @@
             }
           } else if (G.state === "play") {
             G.t += dt;
-            stage(dt);
-            updP(LP, dt);
+            if (MASTER) specTimer(dt);
+            else {
+              stage(dt);
+              updP(LP, dt);
+            }
             PL.forEach((p) => {
               if (!p.me) updR(p, dt);
             });
             tilesUp(dt);
-            netSend(dt);
+            if (!MASTER) netSend(dt);
           } else {
             tilesUp(dt);
             PL.forEach((p) => {
@@ -1576,7 +1661,12 @@
           if (!G) return;
           const srt = PL.slice().sort((a, b) => b.z - a.z),
             mi = srt.indexOf(LP);
-          set("cW", "🏁 " + (mi + 1) + "/" + PL.length);
+          set(
+            "cW",
+            MASTER ? "🎥 Room Master" : "🏁 " + (mi + 1) + "/" + PL.length
+          );
+          if (MASTER)
+            set("spn", "🎥 " + LP.name + (SPEC.auto ? " (pemimpin)" : ""));
           set("cT", "⏱ " + G.t.toFixed(1) + "s");
           const ph = G.phase,
             tm = ph === "timer" ? G.timer : 0,
@@ -1597,16 +1687,18 @@
             (ph === "timer" ? (tm / G.tmax) * 100 : 0).toFixed(0) + "%";
           $("tb").style.background = lo ? "#ff3b3b" : "#2ecc40";
           $("u").style.background = lo ? "#ff7b7b" : "#ffd62e";
-          let rows = srt.slice(0, 5).map((p, i) => [p, i]);
-          if (mi > 4) rows[4] = [LP, mi];
+          let rows = srt.slice(0, MASTER ? 10 : 5).map((p, i) => [p, i]);
+          if (!MASTER && mi > 4) rows[4] = [LP, mi];
           set(
             "rk",
             rows
               .map(
                 (r) =>
                   '<div class="rr' +
-                  (r[0].me ? " me" : "") +
-                  '"><b>' +
+                  (r[0].me || (MASTER && r[0] === LP) ? " me" : "") +
+                  '"' +
+                  (MASTER ? ' data-a="spec:' + r[0].id + '"' : "") +
+                  "><b>" +
                   (r[1] + 1) +
                   '</b><i style="background:' +
                   r[0].col +
@@ -1644,6 +1736,13 @@
           const r = ROOM;
           if (!r) return;
           set("lc", r.code);
+          set(
+            "lms",
+            r.master
+              ? "🎥 Room Master: " + esc(r.master.name) + (MASTER ? " (kamu)" : "")
+              : "🎥 Room Master: belum ada",
+            true
+          );
           let h = "";
           for (let i = 0; i < r.max; i++) {
             const p = r.players[i];
@@ -1659,7 +1758,7 @@
               : '<div class="slot e">· · ·</div>';
           }
           set("lp", h, true);
-          const host = r.host === ME,
+          const host = r.host === ME || MASTER,
             n = r.players.length,
             ok = n >= r.min;
           $("lgo").classList.toggle("hide", !host);
@@ -1894,8 +1993,12 @@
               ? { action: "quick", name: S.name }
               : mode === "create"
               ? { action: "create", name: S.name }
+              : mode === "createmaster"
+              ? { action: "create", name: S.name, master: true }
+              : mode === "joinmaster"
+              ? { action: "join", code, name: S.name, master: true }
               : { action: "join", code, name: S.name };
-          if (mode === "code") {
+          if (mode === "code" || mode === "joinmaster") {
             try {
               const o = JSON.parse(sessionStorage.getItem("mbr_sess"));
               if (o && o.code === code) body.token = o.token;
@@ -1917,6 +2020,7 @@
           NET.fin = 0;
           NET.pos = r.pos || null;
           ME = r.id;
+          setMaster(r.master);
           NET.gn = r.room.status === "playing" ? 0 : r.room.gn; // game yang sedang jalan saat sambung ulang → langsung dimuat
           try {
             sessionStorage.setItem(
@@ -1965,7 +2069,11 @@
         function onRoom(v) {
           if (v.v < NET.v) return;
           NET.v = v.v;
-          if (!v.players.some((p) => p.id === ME)) {
+          if (
+            MASTER
+              ? !(v.master && v.master.id === ME)
+              : !v.players.some((p) => p.id === ME)
+          ) {
             clearSess();
             toMenu();
             setMsg("Kamu terputus dari room (tidak aktif terlalu lama).");
@@ -1980,6 +2088,7 @@
             max: v.max,
             min: v.min,
             host: v.host,
+            master: v.master,
             players: v.players,
           };
           if (v.status === "playing") {
@@ -2075,6 +2184,14 @@
           else toast(url);
         }
         function act(a) {
+          if (a.indexOf("spec:") === 0) {
+            if (MASTER) {
+              SPEC.auto = false;
+              SPEC.id = +a.slice(5);
+              pickSpec();
+            }
+            return;
+          }
           switch (a) {
             case "close":
               closeM();
@@ -2084,6 +2201,27 @@
               break;
             case "create":
               join("create");
+              break;
+            case "createmaster":
+              join("createmaster");
+              break;
+            case "joinmaster": {
+              const c = $("cd").value.trim().toUpperCase();
+              if (c.length < 4) {
+                setMsg("Masukkan kode room 4 huruf");
+                break;
+              }
+              join("joinmaster", c);
+              break;
+            }
+            case "specprev":
+              specStep(-1);
+              break;
+            case "specnext":
+              specStep(1);
+              break;
+            case "specauto":
+              if (MASTER) SPEC.auto = true;
               break;
             case "joincode": {
               const c = $("cd").value.trim().toUpperCase();
@@ -2108,7 +2246,7 @@
               showLobby();
               break;
             case "restart":
-              if (G && G.state === "play" && !hold && G.phase !== "drop")
+              if (!MASTER && G && G.state === "play" && !hold && G.phase !== "drop")
                 respawn(LP, false);
               break;
             case "pause":
@@ -2149,7 +2287,11 @@
           au();
           const k = e.key.toLowerCase(),
             m = MAP[k];
-          if (m) {
+          if (MASTER && G && (k === "arrowleft" || k === "arrowright" || k === "a" || k === "d" || k === "f")) {
+            e.preventDefault();
+            if (k === "f") SPEC.auto = true;
+            else specStep(k === "arrowleft" || k === "a" ? -1 : 1);
+          } else if (m) {
             e.preventDefault();
             K[m] = 1;
           } else if (k === "p" || k === "escape") pause();

@@ -39,7 +39,7 @@ function cleanSt(a) {
 function viewOf(room, now) {
   const v = {
     code: room.code, v: room.v, status: room.status, gn: room.gn, host: room.host, max: core.MAX_PLAYERS, min: core.MIN_PLAYERS,
-    players: room.players.map(p => ({ id: p.id, name: p.name, ci: p.ci })), serverNow: now
+    players: room.players.map(p => ({ id: p.id, name: p.name, ci: p.ci })), master: room.master ? { id: room.master.id, name: room.master.name } : null, serverNow: now
   };
   if (room.status === 'playing') Object.assign(v, { gseed: room.gseed, goAt: room.goAt, rn: room.rn, ph: room.ph, phAt: room.phAt, q: room.q, seed: room.seed, forced: room.forced });
   if (room.win) v.win = room.win;
@@ -74,15 +74,19 @@ function buildWin(room, winner, now, hall, reason) {
 }
 function removePlayers(room, ids, hall, now) {
   if (!ids.length) return;
+  if (room.master && ids.includes(room.master.id)) room.master = null;          // Room Master keluar/terputus: pemain tetap lanjut
   room.players = room.players.filter(p => !ids.includes(p.id)); room.dirty = true;
-  if (!room.players.length) { room.gone = true; return; }
-  if (!room.players.some(p => p.id === room.host)) room.host = room.players[0].id;
-  if (room.status === 'playing' && room.players.length < core.MIN_PLAYERS) {       // semua lawan keluar → sisa pemain menang
-    room.win = buildWin(room, room.players[0], now, hall, 'Semua lawan keluar'); room.status = 'done';
+  if (!room.players.length && !room.master) { room.gone = true; return; }
+  if (!room.players.length) room.host = null;
+  else if (!room.players.some(p => p.id === room.host)) room.host = room.players[0].id;
+  if (room.status === 'playing' && room.players.length < core.MIN_PLAYERS) {
+    if (room.players.length === 1) { room.win = buildWin(room, room.players[0], now, hall, 'Semua lawan keluar'); room.status = 'done'; }   // semua lawan keluar → sisa pemain menang
+    else { room.status = 'lobby'; room.win = null; }                                                                                       // tidak ada pemain tersisa (Room Master masih di room)
   }
 }
 function pruneDead(room, hall, now, exceptToken) {
-  removePlayers(room, room.players.filter(p => p.token !== exceptToken && now - lastSeen(room, p, hall) > DEAD_MS).map(p => p.id), hall, now);
+  const all = room.master ? room.players.concat([room.master]) : room.players;
+  removePlayers(room, all.filter(p => p.token !== exceptToken && now - lastSeen(room, p, hall) > DEAD_MS).map(p => p.id), hall, now);
 }
 /* Pemenang = pemain pertama yang MELAPOR sampai FINISH (dalam lock, jadi hanya satu yang menang). Posisi harus masuk akal. */
 function tryFinish(room, token, st, now, hall) {
@@ -135,34 +139,48 @@ async function withRoom(code, fn) {
     return { room, out };
   } finally { await store.cmd(['DEL', lk]).catch(() => { }); }
 }
-function playerOf(room, token) {
-  const p = token && room.players.find(x => x.token === token);
+/* Anggota room = pemain ATAU Room Master (penonton, tidak dihitung dalam 10 pemain). */
+const isMasterTok = (room, token) => !!(token && room.master && room.master.token === token);
+function memberOf(room, token) {
+  const p = token && (room.players.find(x => x.token === token) || (isMasterTok(room, token) ? room.master : null));
   if (!p) throw fail(401, 'Sesi tidak valid. Gabung ulang ke room.');
   return p;
 }
 
 /* ---------- aksi ---------- */
-async function createRoom(name, pub) {
+async function createRoom(name, pub, asMaster) {
   const store = getStore(), now = Date.now();
   for (let i = 0; i < 20; i++) {
     let code = ''; for (let k = 0; k < 4; k++) code += ALPHABET[crypto.randomInt(ALPHABET.length)];
-    const room = { code, v: 1, pub: !!pub, createdAt: now, status: 'lobby', host: null, nid: 1, players: [], gn: 0, win: null };
-    const p = addPlayer(room, name, now); delete room.dirty;
+    const room = { code, v: 1, pub: !!pub, createdAt: now, status: 'lobby', host: null, nid: 1, players: [], master: null, gn: 0, win: null };
+    let p;
+    if (asMaster) p = room.master = { id: room.nid++, token: rid(12), name, at: now };
+    else p = addPlayer(room, name, now);
+    delete room.dirty;
     if ((await store.cmd(['SET', roomKey(code), JSON.stringify(room), 'NX', 'EX', TTL])) === 'OK') {
       await store.pipeline([['HSET', posKey(code), 'T:' + p.token, String(now)], ['EXPIRE', posKey(code), TTL]]);
       if (pub) await store.cmd(['SET', PUB_KEY, code, 'EX', 900]);
-      return { code, token: p.token, id: p.id, room: viewOf(room, now) };
+      return { code, token: p.token, id: p.id, master: !!asMaster, room: viewOf(room, now) };
     }
   }
   throw fail(503, 'Gagal membuat room. Coba lagi.');
 }
-async function joinRoom(code, name, token) {
+async function joinRoom(code, name, token, asMaster) {
   const now = Date.now();
   const { room, out } = await withRoom(code, async (room, store) => {
-    if (token) { const p = room.players.find(x => x.token === token); if (p) return { token, id: p.id, resumed: true }; }
+    if (token) {
+      const p = room.players.find(x => x.token === token); if (p) return { token, id: p.id, resumed: true };
+      if (isMasterTok(room, token)) return { token, id: room.master.id, resumed: true, master: true };
+    }
     const hall = parseHash(await store.cmd(['HGETALL', posKey(code)]));
     pruneDead(room, hall, now);                                                       // singkirkan pemain "hantu" supaya room tidak terkunci penuh
     if (room.gone) { room.gone = false; room.status = 'lobby'; room.host = null; room.win = null; }
+    if (asMaster) {                                                                    // Room Master: 1 per room, boleh masuk kapan saja (bahkan saat game berjalan)
+      if (room.master) throw fail(409, 'Room ini sudah punya Room Master.');
+      room.master = { id: room.nid++, token: rid(12), name: name || 'Master', at: now }; room.dirty = true;
+      await store.cmd(['HSET', posKey(code), 'T:' + room.master.token, String(now)]);
+      return { token: room.master.token, id: room.master.id, master: true };
+    }
     if (room.status === 'playing') throw fail(409, 'Game di room ini sudah dimulai.');
     if (room.players.length >= core.MAX_PLAYERS) throw fail(409, 'Room penuh (maks ' + core.MAX_PLAYERS + ' pemain).');
     if (!name) throw fail(400, 'Isi nama terlebih dahulu.');
@@ -170,8 +188,8 @@ async function joinRoom(code, name, token) {
     await store.cmd(['HSET', posKey(code), 'T:' + p.token, String(now)]);
     return { token: p.token, id: p.id };
   });
-  const res = { code, token: out.token, id: out.id, room: viewOf(room, now) };
-  if (out.resumed && room.status === 'playing') {                                      // sambung ulang di tengah game: pulihkan posisi terakhir
+  const res = { code, token: out.token, id: out.id, master: !!out.master, room: viewOf(room, now) };
+  if (out.resumed && !out.master && room.status === 'playing') {                      // sambung ulang di tengah game: pulihkan posisi terakhir
     const raw = await getStore().cmd(['HGET', posKey(code), 'P:' + token]);
     try { const s = JSON.parse(raw); if (Array.isArray(s)) res.pos = s.slice(0, 11); } catch (e) { }
   }
@@ -179,7 +197,7 @@ async function joinRoom(code, name, token) {
 }
 async function actCreate(b) {
   const name = cleanName(b.name); if (!name) throw fail(400, 'Isi nama terlebih dahulu.');
-  return createRoom(name, false);
+  return createRoom(name, false, !!b.master);
 }
 async function actQuick(b) {
   const name = cleanName(b.name); if (!name) throw fail(400, 'Isi nama terlebih dahulu.');
@@ -188,13 +206,13 @@ async function actQuick(b) {
   return createRoom(name, true);
 }
 async function actJoin(b) {
-  return joinRoom(normCode(b.code), cleanName(b.name), TOKEN_RE.test(b.token || '') ? b.token : null);
+  return joinRoom(normCode(b.code), cleanName(b.name), TOKEN_RE.test(b.token || '') ? b.token : null, !!b.master);
 }
 async function actStart(b) {
   const code = normCode(b.code), now = Date.now();
   const { room } = await withRoom(code, async (room, store) => {
-    const p = playerOf(room, b.token);
-    if (room.host !== p.id) throw fail(403, 'Hanya host yang bisa memulai game.');
+    const p = memberOf(room, b.token);
+    if (room.host !== p.id && !isMasterTok(room, b.token)) throw fail(403, 'Hanya host atau Room Master yang bisa memulai game.');
     if (room.status === 'playing') return;                                             // sudah mulai (tombol ditekan dua kali)
     if (room.players.length < core.MIN_PLAYERS) throw fail(400, 'Minimal ' + core.MIN_PLAYERS + ' pemain untuk mulai.');
     startGame(room, now);
@@ -206,7 +224,7 @@ async function actStart(b) {
 async function actLeave(b) {
   const code = normCode(b.code), now = Date.now();
   await withRoom(code, async (room, store) => {
-    const p = playerOf(room, b.token);
+    const p = memberOf(room, b.token);
     const hall = parseHash(await store.cmd(['HGETALL', posKey(code)]));
     removePlayers(room, [p.id], hall, now);
   });
@@ -225,17 +243,17 @@ async function actSync(b) {
   const res = await store.pipeline(cmds), raw = res[res.length - 2], hall = parseHash(res[res.length - 1]);
   if (!raw) { await store.pipeline([['DEL', pk], ['DEL', okKey(code)]]); throw fail(404, 'Room tidak ditemukan atau sudah kedaluwarsa.'); }
   let room = JSON.parse(raw);
-  playerOf(room, token);
-  const dead = room.players.some(p => p.token !== token && now - lastSeen(room, p, hall) > DEAD_MS);
+  memberOf(room, token);
+  const dead = room.players.concat(room.master ? [room.master] : []).some(p => p.token !== token && now - lastSeen(room, p, hall) > DEAD_MS);
   const wantFin = !!b.fin && room.status === 'playing' && !room.win;
   if (needsTick(room, now) || dead || wantFin) {
     const r = await withRoom(code, async (rm, s) => {
-      if (!rm.players.some(p => p.token === token)) return;
+      if (!rm.players.some(p => p.token === token) && !isMasterTok(rm, token)) return;
       if (wantFin) tryFinish(rm, token, st, now, hall);
       pruneDead(rm, hall, now, token);
       await tick(rm, now, s);
     });
-    room = r.room; playerOf(room, token);
+    room = r.room; memberOf(room, token);
   }
   const out = { v: room.v, serverNow: now };
   if (room.v !== have) out.room = viewOf(room, now);

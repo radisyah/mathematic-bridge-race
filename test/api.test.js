@@ -32,7 +32,7 @@ const rewind = (code, ms) => patchRoom(code, r => { r.goAt -= ms; r.phAt -= ms; 
     for (let r = 0; r <= 12; r++) for (let i = 0; i < 1500; i++) {
       const q = core.makeQuestion(r), n = q.t.split(' ').filter((_, k) => k % 2 === 0).length;
       assert(Number.isInteger(q.ans) && q.ans >= 1 && q.ans <= 10, q.t);
-      assert.strictEqual(n, r < 3 ? 2 : r < 6 ? 3 : 4, 'jumlah angka ronde ' + r + ': ' + q.t);
+      assert.strictEqual(n, r < 6 ? 2 : 3, 'jumlah angka ronde ' + r + ': ' + q.t);
       q.t.split(' ').filter((_, k) => k % 2 === 0).forEach(x => assert(x >= 1 && x <= 10));
       assert.strictEqual(Function('return ' + q.t.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-'))(), q.ans, q.t);
     }
@@ -176,6 +176,59 @@ const rewind = (code, ms) => patchRoom(code, r => { r.goAt -= ms; r.phAt -= ms; 
     await sync(B.code, B.token, { st: st(55.5) });
     const r = await post('join', { code: A.code, token: B.token }); assert(r.ok && r.id === B.id && r.token === B.token && r.pos && r.pos[2] === 55.5);
     const bad = await post('join', { code: A.code, token: 'c'.repeat(24) }); assert(!bad.ok && bad.http === 409);
+  });
+
+  await T('Room Master: di luar 10 pemain, hanya satu per room, token tidak bocor, bisa mulai game', async () => {
+    const M = await post('create', { name: 'Master', master: true });
+    assert(M.ok && M.master === true && M.room.players.length === 0 && M.room.master.id === M.id && M.room.host === null);
+    const ps = [];
+    for (let i = 0; i < 10; i++) { const j = await post('join', { code: M.code, name: 'P' + i }); assert(j.ok && !j.master, JSON.stringify(j)); ps.push(j); }
+    assert.strictEqual((await post('join', { code: M.code, name: 'P11' })).http, 409);                 // pemain ke-11 tetap ditolak
+    assert.strictEqual((await post('join', { code: M.code, name: 'M2', master: true })).http, 409);    // master kedua ditolak
+    assert.strictEqual(ps[0].room.host, ps[0].id);
+    const v = (await sync(M.code, M.token, { v: 0 })).room;
+    assert.strictEqual(v.players.length, 10); assert.strictEqual(v.master.id, M.id);
+    assert(!v.players.some(p => p.id === M.id));
+    assert(!JSON.stringify(v).includes(M.token) && !JSON.stringify(v).includes(ps[0].token));
+    assert.strictEqual((await post('start', { code: M.code, token: ps[1].token })).http, 403);         // pemain biasa non-host tetap tak bisa
+    const s = await post('start', { code: M.code, token: M.token }); assert(s.ok && s.room.status === 'playing');   // master bisa mulai
+    assert.strictEqual((await post('join', { code: M.code, name: 'Telat' })).http, 409);
+  });
+
+  await T('Room Master: melihat posisi 10 pemain, tidak ikut bermain (posisi/FINISH/ok diabaikan), pemain tidak melihat master', async () => {
+    const M = await post('create', { name: 'Master', master: true }), ps = [];
+    for (let i = 0; i < 10; i++) ps.push(await post('join', { code: M.code, name: 'P' + i }));
+    await post('start', { code: M.code, token: M.token }); await rewind(M.code, core.COUNTDOWN_MS + 1000);
+    for (let i = 0; i < 10; i++) await sync(M.code, ps[i].token, { st: st(10 + i) });
+    const m = await sync(M.code, M.token, { v: 0, fin: 1, st: st(core.FINISH_Z + 5) });                 // master mencoba curang
+    assert.strictEqual(Object.keys(m.ps).length, 10);
+    ps.forEach((p, i) => assert.strictEqual(m.ps[p.id][2], 10 + i));
+    assert.strictEqual(m.room.status, 'playing'); assert(!m.room.win);                                  // master tak bisa memenangkan game
+    const a = await sync(M.code, ps[0].token, { v: 0 });
+    assert.strictEqual(Object.keys(a.ps).length, 9); assert(!(M.id in a.ps));
+  });
+
+  await T('Room Master: keluar tidak mengakhiri game; sambung ulang dengan token; room tanpa pemain tetap hidup', async () => {
+    const M = await post('create', { name: 'Master', master: true });
+    const A = await post('join', { code: M.code, name: 'A' }), B = await post('join', { code: M.code, name: 'B' });
+    await post('start', { code: M.code, token: A.token });
+    const r = await post('join', { code: M.code, token: M.token, master: true }); assert(r.ok && r.master && r.id === M.id && r.token === M.token);
+    assert((await post('leave', { code: M.code, token: M.token })).ok);
+    const a = await sync(M.code, A.token, { v: 0 }); assert.strictEqual(a.room.status, 'playing'); assert.strictEqual(a.room.master, null);
+    const M2 = await post('join', { code: M.code, name: 'Master2', master: true }); assert(M2.ok && M2.master);   // master baru boleh masuk di tengah game
+    await post('leave', { code: M.code, token: A.token }); await post('leave', { code: M.code, token: B.token });
+    const m = await sync(M.code, M2.token, { v: 0 }); assert(m.ok && m.room.players.length === 0 && m.room.master.id === M2.id);
+    assert((await post('leave', { code: M.code, token: M2.token })).ok);
+    assert.strictEqual(await store().cmd(['GET', 'room:' + M.code]), null);                              // tanpa master & pemain → room dihapus
+  });
+
+  await T('Room Master terputus disingkirkan; pemain tetap bermain', async () => {
+    const M = await post('create', { name: 'Master', master: true });
+    const A = await post('join', { code: M.code, name: 'A' }), B = await post('join', { code: M.code, name: 'B' });
+    await patchRoom(M.code, r => { r.master.at -= 60000; });
+    await store().cmd(['HSET', 'pos:' + M.code, 'T:' + M.token, String(Date.now() - 60000)]);
+    const a = await sync(M.code, A.token, { v: 0 }); assert.strictEqual(a.room.master, null); assert.strictEqual(a.room.players.length, 2);
+    assert.strictEqual((await sync(M.code, M.token, {})).http, 401);
   });
 
   srv.close();

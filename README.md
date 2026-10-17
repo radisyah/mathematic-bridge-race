@@ -63,6 +63,7 @@ python3 test/e2e.py       # 2 browser Chromium memainkan klien sungguhan (butuh:
 |---|---|
 | Lobby | Maks 10 pemain, host menekan MULAI (minimal 2). Host pergi → host berpindah ke pemain berikutnya. |
 | Main Cepat | Masuk lobby umum yang sedang menunggu; bila tidak ada, dibuat baru. Lobby ditutup saat game dimulai. |
+| Room Master | Peserta ke-11 di luar 10 pemain, **hanya menonton**: melihat semua pemain bermain, kamera mengikuti pemain terdepan (AUTO) atau pemain yang dipilih (◀ ▶, klik nama di peringkat, tombol ← → / F). Tidak punya karakter, tidak bisa menang/curang, boleh menekan MULAI. Maks 1 per room; boleh masuk kapan saja (juga saat game berjalan). Buat room lewat **🎥 Buat Room sebagai Room Master**, atau isi kode lalu **🎥 Gabung sebagai Room Master**. Master keluar/terputus → game pemain tetap lanjut. |
 | Mulai | Hitung mundur disinkronkan jam server, jadi semua pemain mulai bersamaan walau polling berbeda ±0,7 dtk. |
 | Soal | Naik tiap ronde: 2 angka → 3 angka (mulai ronde 4) → 4 angka (mulai ronde 7). Angka 1–10, jawaban bulat 1–10. |
 | Ubin benar | Ubin tempat pemain berhasil berdiri tetap menjadi ubin benar di ronde berikutnya (`forced`), seperti di klien. |
