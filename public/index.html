@@ -2327,8 +2327,29 @@
         const PS = Math.sin(CAM_PITCH),
           PC = Math.cos(CAM_PITCH),
           NEAR = 0.3;
+        /* ===== RENDER JEMBATAN BERTAHAP (anti-lag HP kentang) =====
+           Hanya ubin yang benar-benar terlihat layar yang digambar. Batas depan dihitung dari
+           ukuran layar, lalu otomatis dipersempit bila FPS turun & dilebarkan lagi saat lancar.
+           Ubin di tepi jauh muncul pelan-pelan (fade-in) seiring pemain maju. */
+        const RENDER = {
+          maxAhead: 90, // batas mutlak jarak gambar ke depan (satuan dunia)
+          minScale: 0.45, // skala terkecil saat adaptif (45% dari jarak geometris)
+          fade: 10, // lebar zona fade-in di tepi jauh
+          adaptive: true, // false = jarak tetap (tanpa penyesuaian FPS)
+          scale: 1, // dikendalikan otomatis oleh loop
+          lodPx: 24, // ubin lebih kecil dari ini (px) digambar versi ringan
+          res: 1, // pengali resolusi canvas; turun otomatis (min 0.6) bila masih lag di jarak minimum
+        };
+        let FAR_DZ = 40; // jarak geometris terlihat di depan kamera (dihitung ulang tiap frame)
+        function calcFarDz() {
+          // jarak z (dari kamera) tempat permukaan jembatan menyentuh tepi atas layar + sedikit margin
+          const r = (HY + 40) / F,
+            den = PS - r * PC;
+          const d = den > 0.02 ? (CAM_H * (PC + r * PS)) / den : RENDER.maxAhead;
+          return Math.max(14, Math.min(RENDER.maxAhead, d + TD));
+        }
         function resize() {
-          DPR = Math.min(devicePixelRatio || 1, 2);
+          DPR = Math.min(devicePixelRatio || 1, 2) * RENDER.res;
           W = innerWidth;
           H = innerHeight;
           VW = W;
@@ -2498,6 +2519,65 @@
             );
           }
         }
+        /* Label nama pemain: sprite di-cache per (teks, warna) */
+        const LBLTEX = {},
+          LBL_FS = 40;
+        function lblDraw(str, cx, cy, fs, fill, ow) {
+          const key = str + "|" + fill + "|" + ow;
+          let e = LBLTEX[key];
+          if (!e) {
+            const c = document.createElement("canvas"),
+              g = c.getContext("2d");
+            g.font = "900 " + LBL_FS + "px " + FF;
+            const w = Math.ceil(g.measureText(str).width + LBL_FS * 0.6),
+              h = Math.ceil(LBL_FS * 1.5);
+            c.width = w;
+            c.height = h;
+            g.font = "900 " + LBL_FS + "px " + FF;
+            g.textAlign = "center";
+            g.textBaseline = "middle";
+            g.lineJoin = "round";
+            g.lineWidth = LBL_FS * ow;
+            g.strokeStyle = "#000";
+            g.strokeText(str, w / 2, h / 2);
+            g.fillStyle = fill;
+            g.fillText(str, w / 2, h / 2);
+            if (Object.keys(LBLTEX).length > 60) for (const k in LBLTEX) delete LBLTEX[k];
+            e = LBLTEX[key] = { c, w, h };
+          }
+          const k = fs / LBL_FS;
+          x.drawImage(e.c, cx - (e.w * k) / 2, cy - (e.h * k) / 2, e.w * k, e.h * k);
+        }
+        /* Angka ubin: outline hanya digambar SEKALI ke sprite, lalu di-drawImage (jauh lebih ringan dari strokeText) */
+        const NUMTEX = {},
+          NUM_FS = 96;
+        function numTex(v) {
+          let e = NUMTEX[v];
+          if (e) return e;
+          const c = document.createElement("canvas"),
+            g = c.getContext("2d"),
+            str = String(v);
+          g.font = "900 " + NUM_FS + "px " + FF;
+          const w = Math.ceil(g.measureText(str).width + NUM_FS * 0.4),
+            h = Math.ceil(NUM_FS * 1.4);
+          c.width = w;
+          c.height = h;
+          g.font = "900 " + NUM_FS + "px " + FF;
+          g.textAlign = "center";
+          g.textBaseline = "middle";
+          g.lineJoin = "round";
+          g.lineWidth = NUM_FS * 0.16;
+          g.strokeStyle = "#000";
+          g.strokeText(str, w / 2, h / 2);
+          g.fillStyle = "#fff";
+          g.fillText(str, w / 2, h / 2);
+          return (NUMTEX[v] = { c, w, h });
+        }
+        function numDraw(v, cx, cy, fs) {
+          const e = numTex(v),
+            k = fs / NUM_FS;
+          x.drawImage(e.c, cx - (e.w * k) / 2, cy - (e.h * k) / 2, e.w * k, e.h * k);
+        }
         function tile(t) {
           if (t.state === 3) return;
           const ox = t.state === 1 ? Math.sin(t.shake * 70) * 0.05 : 0,
@@ -2516,29 +2596,38 @@
           ];
           const c =
             t.state === 1 && Math.floor(t.shake * 14) % 2 ? "#ff4a4a" : t.col;
+          /* fade-in di tepi jauh: ubin "muncul" pelan-pelan saat pemain maju */
+          const edge = Math.max(
+              0,
+              Math.min(1, (cam.z + FAR_DZ - z0) / RENDER.fade)
+            ),
+            small =
+              (F * TW) / (CAM_H * PS + (t.z - cam.z) * PC) < RENDER.lodPx;
           x.save();
           x.globalAlpha =
-            t.state === 2 ? Math.max(0, 1 + t.y / 9) : Math.min(1, t.age * 3);
-          if (cam.z < z0)
+            (t.state === 2
+              ? Math.max(0, 1 + t.y / 9)
+              : Math.min(1, t.age * 3)) * edge;
+          if (!small && cam.z < z0)
             poly(
               [V(x0, yt, z0), V(x1, yt, z0), V(x1, yb, z0), V(x0, yb, z0)],
               sh(c, 0.7),
               E
             );
-          if (cam.x < x0)
+          if (!small && cam.x < x0)
             poly(
               [V(x0, yt, z0), V(x0, yt, z1), V(x0, yb, z1), V(x0, yb, z0)],
               sh(c, 0.55),
               E
             );
-          if (cam.x > x1)
+          if (!small && cam.x > x1)
             poly(
               [V(x1, yt, z0), V(x1, yt, z1), V(x1, yb, z1), V(x1, yb, z0)],
               sh(c, 0.55),
               E
             );
           poly(top(), c, E);
-          if (t.kind === "tile" && t.state === 0)
+          if (!small && t.kind === "tile" && t.state === 0)
             poly(top(), "rgba(255,255,255,.2)", "#fff200");
           const a = SC(V(x0, yt, t.z)),
             b = SC(V(x1, yt, t.z)),
@@ -2553,7 +2642,7 @@
           if (fs > 7) {
             if (t.kind === "tile") {
               if (!t.done)
-                txt(
+                numDraw(
                   t.scr > 0
                     ? ((Math.floor(t.scr * 16) * 7 +
                         t.ci * 5 +
@@ -2649,7 +2738,7 @@
             x.fillStyle = "#4a3320";
             x.fillRect(gx - 0.16 * s, yb - 0.98 * s, 0.32 * s, 0.17 * s);
           }
-          txt(
+          lblDraw(
             p.name,
             gx,
             yb - 1.12 * s,
@@ -2712,15 +2801,26 @@
             x.fill();
           });
           if (G) {
-            const Ls = [];
-            if (G.start.z > fp.z - 14) Ls.push(G.start);
-            const k0 = Math.max(0, Math.floor((fp.z - 14) / (GR * TD))),
-              k1 = Math.min(M - 1, Math.floor((fp.z + 120) / (GR * TD)));
-            for (let k = k0; k <= k1; k++)
-              for (const t of G.secs[k].tiles)
-                if (t.z > fp.z - 14 && t.z < fp.z + 120) Ls.push(t);
-            if (G.fin.z < fp.z + 120) Ls.push(G.fin);
-            G.debris.forEach((t) => Ls.push(t));
+            const Ls = [],
+              zMin = cam.z - 0.5, // di belakang ini sudah di bawah layar / di belakang kamera
+              farD = Math.max(RENDER.fade + 6, calcFarDz() * RENDER.scale),
+              zMax = cam.z + farD;
+            FAR_DZ = farD;
+            if (G.start.z + G.start.d / 2 > zMin) Ls.push(G.start);
+            const k0 = Math.max(0, Math.floor((zMin - TD) / (GR * TD))),
+              k1 = Math.min(M - 1, Math.floor(zMax / (GR * TD)));
+            for (let k = k0; k <= k1; k++) {
+              const ts = G.secs[k].tiles;
+              for (let i = 0; i < ts.length; i++) {
+                const t = ts[i];
+                if (t.state !== 3 && t.z + TD / 2 > zMin && t.z - TD / 2 < zMax)
+                  Ls.push(t);
+              }
+            }
+            if (G.fin.z - G.fin.d / 2 < zMax) Ls.push(G.fin);
+            G.debris.forEach((t) => {
+              if (t.state !== 3 && t.z + TD / 2 > zMin) Ls.push(t);
+            });
             Ls.sort(
               (a, b) =>
                 b.z - a.z || Math.abs(b.x - cam.x) - Math.abs(a.x - cam.x)
@@ -2758,11 +2858,33 @@
             });
         }
         /* ===== LOOP (requestAnimationFrame + delta time) ===== */
-        let last = 0;
+        let last = 0,
+          FT = 0,
+          LAG = 0;
         function loop(t) {
           requestAnimationFrame(loop);
-          const dt = Math.min(0.05, (t - last) / 1000 || 0);
+          const raw = (t - last) / 1000 || 0,
+            dt = Math.min(0.05, raw);
           last = t;
+          if (RENDER.adaptive && G && raw > 0 && raw < 0.5) {
+            /* rata-rata waktu frame -> sempitkan jarak gambar bila lag, lebarkan lagi bila lancar */
+            FT = FT ? FT + (raw - FT) * 0.12 : raw;
+            if (FT > 0.026) RENDER.scale = Math.max(RENDER.minScale, RENDER.scale - 0.7 * raw);
+            else if (FT < 0.019) RENDER.scale = Math.min(1, RENDER.scale + 0.12 * raw);
+            /* sudah di jarak minimum tapi masih lag >2 dtk -> turunkan resolusi canvas (satu arah) */
+            if (RENDER.scale <= RENDER.minScale + 0.001 && FT > 0.032 && RENDER.res > 0.61) {
+              LAG += raw;
+              if (LAG > 1.5) {
+                LAG = 0;
+                FT = 0;
+                RENDER.res = Math.max(0.6, RENDER.res - 0.2);
+                DPR = Math.min(devicePixelRatio || 1, 2) * RENDER.res;
+                cv.width = W * DPR;
+                cv.height = H * DPR;
+                x.setTransform(DPR, 0, 0, DPR, 0, 0);
+              }
+            } else LAG = 0;
+          }
           update(dt);
           draw();
           hud();

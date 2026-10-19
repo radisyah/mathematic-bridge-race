@@ -84,3 +84,17 @@ python3 test/e2e.py       # 2 browser Chromium memainkan klien sungguhan (butuh:
 - Room kedaluwarsa 6 jam setelah aktivitas terakhir.
 - Bila ingin gerakan lebih halus lagi (latensi ~50 ms), tahap berikutnya adalah layanan realtime (Ably, Pusher,
   PartyKit, Supabase Realtime) sebagai pengganti polling; logika wasit di `api/room.js` bisa dipertahankan.
+
+## Performa di HP lemah (render jembatan bertahap)
+
+`public/index.html` sekarang tidak menggambar seluruh jembatan, hanya ubin yang benar-benar terlihat layar:
+
+- **Batas depan dihitung dari ukuran layar** (di mana permukaan jembatan menyentuh tepi atas layar), bukan angka tetap 120.
+  Ubin yang sudah jatuh / di belakang kamera dilewati sebelum masuk daftar gambar.
+- **Fade-in di tepi jauh**: ubin muncul pelan-pelan seiring pemain maju.
+- **Adaptif**: jarak gambar dipersempit otomatis bila FPS turun, dilebarkan lagi saat lancar; bila sudah di jarak minimum
+  tapi masih lag, resolusi canvas diturunkan bertahap (min 60%).
+- **LOD ringan** untuk ubin kecil (tanpa sisi samping & highlight kuning).
+- **Angka ubin & nama pemain di-cache sebagai sprite** (sebelumnya `strokeText` tiap frame, ±33% waktu CPU).
+
+Pengaturan ada di objek `RENDER` (sebelum `function resize()`): `maxAhead`, `minScale`, `fade`, `adaptive`, `lodPx`, `res`.
