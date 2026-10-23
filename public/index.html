@@ -15,7 +15,7 @@
     <meta name="theme-color" content="#1d6fe8" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
-    <title>Mathematic Bridge Race Online</title>
+    <title>RIFTRACE Online</title>
     <style>
       :root {
         --f: "Arial Rounded MT Bold", "Trebuchet MS", "Segoe UI", sans-serif;
@@ -2171,10 +2171,10 @@
           if (!ROOM) return;
           const url =
               location.origin + location.pathname + "?room=" + ROOM.code,
-            txt = "Ayo main Mathematic Bridge Race! Kode room: " + ROOM.code;
+            txt = "Ayo main RIFTRACE! Kode room: " + ROOM.code;
           if (navigator.share) {
             navigator
-              .share({ title: "Mathematic Bridge Race", text: txt, url })
+              .share({ title: "RIFTRACE", text: txt, url })
               .catch(() => {});
             return;
           }
@@ -2903,7 +2903,7 @@
             )
             .join("");
         $("ttl").innerHTML =
-          lt("MATHEMATIC", 0) + "<br>" + lt("BRIDGE RACE", 3);
+          lt("RIFTRACE", 0) + "<br>" + lt("ONLINE", 3);
         $("fx").innerHTML = Array.from(
           { length: 16 },
           (_, i) =>
